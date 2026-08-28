@@ -239,6 +239,24 @@ def parse_agent_output(raw_text: str) -> dict:
             except json.JSONDecodeError:
                 pass
 
+    # Greedy recovery: some models (esp. gemini-flash) emit minor JSON defects —
+    # trailing commas, a stray sentence after the closing brace, or a single
+    # unbalanced brace. Try the first '{' .. last '}' slice with trailing commas
+    # stripped. This rescues otherwise-valid verdicts (e.g. the Test Agent's
+    # {"test_status":"passed",...}) that would otherwise be dropped to raw_output
+    # and wrongly reported as a pipeline failure.
+    import re as _re
+    first = text.find("{")
+    last = text.rfind("}")
+    if first >= 0 and last > first:
+        greedy = text[first:last + 1]
+        greedy = _re.sub(r",(\s*[}\]])", r"\1", greedy)  # remove trailing commas
+        for attempt in (greedy, _escape_newlines_in_strings(greedy)):
+            try:
+                return json.loads(attempt)
+            except json.JSONDecodeError:
+                pass
+
     if '"generated_code"' in text:
         sql = _extract_generated_code(text)
         if sql:

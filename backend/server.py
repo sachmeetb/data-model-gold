@@ -1359,6 +1359,8 @@ async def _run_generate_and_test(spec: dict, session_id: str, user_feedback: str
         print(f"[TEST AGENT] iter={i} session={session_id[:8]} "
               f"status={test_report.get('test_status')!r} "
               f"failures={[(f.get('check') or f.get('detail') or f.get('message') or '?') for f in (test_report.get('failures') or [])]}")
+        if "raw_output" in test_report:
+            print(f"[TEST AGENT] UNPARSED raw_output[:600]={test_report['raw_output'][:600]!r}")
         if "error" in test_report or "raw_output" in test_report:
             return {
                 "status": "failed",
