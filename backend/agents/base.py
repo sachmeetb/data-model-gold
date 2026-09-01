@@ -43,6 +43,12 @@ if _GCP_PROJECT and not os.environ.get("GOOGLE_GENAI_USE_VERTEXAI"):
 # ── Google packages (after env vars are set) ──────────────────────────────────
 import google.genai as genai
 from google.genai.types import Content, GenerateContentConfig, Part
+try:
+    # Available in google-genai >= 1.x; guarded so an older SDK can't crash the
+    # runner at import time (we simply skip the thinking cap if unavailable).
+    from google.genai.types import ThinkingConfig
+except ImportError:  # pragma: no cover
+    ThinkingConfig = None
 from opentelemetry import trace
 from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
@@ -79,7 +85,8 @@ SKILL_REGISTRY = {
 
 _SKILL_MAX_TOKENS: dict[str, int] = {
     "pipeline-generator":        16000,
-    "test-agent":                8000,
+    "test-agent":                12000,   # large sample_query_result JSON — needs headroom
+    "challenger":                8000,    # 5 checks + summary + design_queue (was default 4096 → truncated → empty PDF)
     "publisher":                 8000,
     "requirement-understanding": 8000,
     "gold-er":                   12000,
@@ -110,6 +117,30 @@ _SKILL_MODEL: dict[str, str] = {
 }
 if os.getenv("GEMINI_MODEL_TIER") == "flash":
     _SKILL_MODEL = {k: _FLASH_MODEL for k in _SKILL_MODEL}
+
+# ── Thinking budget ───────────────────────────────────────────────────────────
+# gemini-2.5-flash has "thinking" ON by default, and thinking tokens are drawn
+# from the SAME max_output_tokens budget as the answer. For agents that must emit
+# a large structured JSON (Test Agent, Challenger, …), unbounded thinking can
+# consume the budget and truncate the JSON mid-object → the response fails to
+# parse → run_agent returns {"raw_output": ...}. A PASSING test then looks like a
+# failure ("Pipeline build failed"), and the Challenger review PDF comes out
+# empty. Capping the thinking budget guarantees room for the actual answer.
+# Applied only to flash agents; pro models manage their own budget. Tunable via
+# the FLASH_THINKING_BUDGET env var (set to 0 to disable thinking entirely).
+_FLASH_THINKING_BUDGET = int(os.getenv("FLASH_THINKING_BUDGET", "2048"))
+
+
+def _thinking_config_for(skill_name: str):
+    """Return a ThinkingConfig for flash agents (bounded budget), else None."""
+    if ThinkingConfig is None:
+        return None
+    if _SKILL_MODEL.get(skill_name) != _FLASH_MODEL:
+        return None
+    try:
+        return ThinkingConfig(thinking_budget=_FLASH_THINKING_BUDGET)
+    except Exception:  # pragma: no cover - defensive against SDK field changes
+        return None
 
 # ── google.genai client (lazy, one per process) ───────────────────────────────
 
@@ -361,13 +392,17 @@ async def run_agent(
         span.set_attribute("agent.thread_id", session)
 
         try:
+            _cfg_kwargs = {
+                "system_instruction": system_instruction,
+                "max_output_tokens": max_tok,
+            }
+            _tcfg = _thinking_config_for(skill_name)
+            if _tcfg is not None:
+                _cfg_kwargs["thinking_config"] = _tcfg
             response = await _client().aio.models.generate_content(
                 model=model,
                 contents=contents,
-                config=GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    max_output_tokens=max_tok,
-                ),
+                config=GenerateContentConfig(**_cfg_kwargs),
             )
             result_text = response.text
 

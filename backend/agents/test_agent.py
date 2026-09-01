@@ -159,6 +159,91 @@ def _enforce_catalog_sample_data(report: dict, catalog: dict) -> dict:
     return report
 
 
+# ── raw_output verdict salvage ────────────────────────────────────────────────
+# Even with the thinking budget capped in base.py, a very large sample_query_result
+# could in principle still truncate the JSON and make run_agent return
+# {"raw_output": <text>}. The truncation always happens AFTER the verdict fields
+# (test_status / failures / passed_checks / summary) and INSIDE the big
+# sample_query_result block, so the verdict itself is almost always intact in the
+# text. Recover it here so a genuinely-passing test is never misreported as a
+# failure just because the JSON didn't close.
+_TEST_STATUS_RE   = re.compile(r'"test_status"\s*:\s*"(passed|failed)"', re.IGNORECASE)
+_PASSED_CHECKS_RE = re.compile(r'"passed_checks"\s*:\s*\[(.*?)\]', re.DOTALL)
+_SUMMARY_RE       = re.compile(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _extract_failures(raw: str) -> list:
+    """Best-effort extraction of the failures[] array from a truncated response."""
+    start = raw.find('"failures"')
+    if start < 0:
+        return []
+    lb = raw.find("[", start)
+    if lb < 0:
+        return []
+    depth = 0
+    for i in range(lb, len(raw)):
+        if raw[i] == "[":
+            depth += 1
+        elif raw[i] == "]":
+            depth -= 1
+            if depth == 0:
+                try:
+                    arr = json.loads(raw[lb:i + 1])
+                    return arr if isinstance(arr, list) else []
+                except json.JSONDecodeError:
+                    return []
+    return []  # array itself was truncated
+
+
+def _salvage_raw_output(report: dict) -> dict:
+    """If the Test Agent response failed to parse (returned as {"raw_output": …}),
+    recover the verdict from the text. Returns a structured report when a clear
+    verdict is found; otherwise returns the original (the caller's loop will
+    regenerate and retry)."""
+    if not isinstance(report, dict) or "raw_output" not in report:
+        return report
+    raw = report.get("raw_output")
+    if not isinstance(raw, str) or not raw:
+        return report
+
+    m = _TEST_STATUS_RE.search(raw)
+    if not m:
+        return report  # no recoverable verdict — leave as raw_output → retry
+
+    status = m.group(1).lower()
+    pc = _PASSED_CHECKS_RE.search(raw)
+    checks = re.findall(r'"([^"]+)"', pc.group(1)) if pc else []
+    sm = _SUMMARY_RE.search(raw)
+    summary = sm.group(1) if sm else (
+        "All checks passed." if status == "passed" else "Validation reported failures."
+    )
+
+    if status == "passed":
+        return {
+            "test_status": "passed",
+            "failures": [],
+            "passed_checks": checks,
+            "summary": summary,
+            "_salvaged_from_raw_output": True,
+        }
+
+    # status == "failed": recover failures so the regenerate loop still gets
+    # actionable feedback; fall back to a generic entry if the array truncated.
+    failures = _extract_failures(raw) or [{
+        "check": "unparsed_response",
+        "severity": "HIGH",
+        "detail": "Test Agent reported failures but the response was truncated before they could be read.",
+        "suggestion": "Regenerate the pipeline.",
+    }]
+    return {
+        "test_status": "failed",
+        "failures": failures,
+        "passed_checks": checks,
+        "summary": summary,
+        "_salvaged_from_raw_output": True,
+    }
+
+
 def _syntax_check(code: str) -> tuple[bool, str]:
     """
     Basic SQL syntax validation — runs locally before the LLM call.
@@ -237,6 +322,10 @@ async def run(generated_code: str, spec: dict | None = None, session=None) -> di
         context=context,
         session=session,
     )
+
+    # Resilience: if the JSON didn't parse (truncation → {"raw_output": …}),
+    # recover the verdict from the text so a passing test isn't misreported.
+    report = _salvage_raw_output(report)
 
     # Deterministic safety net: even with the SKILL telling it NOT to
     # fabricate, the LLM sometimes invents sample rows. Walk the result and
