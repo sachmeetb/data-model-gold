@@ -72,12 +72,35 @@ export function agentInitials(agentName) {
 }
 
 // Derive the active delivery phase from the backend `current_step`.
+//
+// IMPORTANT: the backend prefixes several *design* and *build* steps with
+// `dpi_` (e.g. dpi_review_er, dpi_review_gold_sttm, dpi_review_silver_xform,
+// dpi_review_pg). A naive `startsWith('dpi_')` check therefore pinned every one
+// of them to phase 1 and the Progress stepper never advanced. So we classify by
+// the step's SEMANTIC suffix first (build → design → identify), and only fall
+// back to the prefix. We also avoid a bare `includes('er')`, which wrongly
+// matched "challeng-ER" / "gen-ER-ator".
 export function phaseForStep(step) {
   if (!step) return null
-  if (step.startsWith('dpi_') || step === 'initial') return 'dpi'
-  if (step.startsWith('ddi_') || step.includes('design') || step.includes('sttm') || step.includes('er'))
-    return 'designer'
-  if (step.startsWith('dpb') || step.includes('pipeline') || step.includes('publish') || step.includes('test'))
-    return 'builder'
+  const s = step.toLowerCase()
+
+  // Build phase — pipeline / publish / test / deploy / approval / done.
+  // Covers dpi_review_pg, ddi_* pipeline steps, awaiting_(test_)approval, complete.
+  if (
+    s.includes('pipeline') || s.includes('_pg') || s.endsWith('pg') ||
+    s.includes('publish') || s.includes('test') || s.includes('deploy') ||
+    s.includes('approval') || s.startsWith('dpb') || s === 'complete'
+  ) return 'builder'
+
+  // Design phase — ER model / STTM / transform / gold-model / silver.
+  // Covers dpi_review_er, dpi_review_gold_sttm, dpi_review_silver_xform, ddi_*.
+  if (
+    s.startsWith('ddi_') || s.includes('review_er') || s.includes('sttm') ||
+    s.includes('xform') || s.includes('transform') || s.includes('design') ||
+    s.includes('gold_model') || s.includes('silver')
+  ) return 'designer'
+
+  // Identify phase — everything else DPI (initial, clarifying, confirm, gate,
+  // challenger review, classification, discovery).
   return 'dpi'
 }

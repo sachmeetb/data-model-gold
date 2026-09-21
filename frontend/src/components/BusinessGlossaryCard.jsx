@@ -50,7 +50,7 @@ export default function BusinessGlossaryCard({ glossary }) {
 
       <div className="flex items-center justify-between px-4 py-2" style={{ background: '#FAF7FD', borderTop: `1px solid ${BP.border}` }}>
         <div className="t-105" style={{ color: BP.textMuted }}>
-          These descriptions are saved to the data product's <b style={{ color: BP.greenDark }}>business glossary</b> and shown in Power BI tooltips and Unity Catalog.
+          These descriptions are saved to the data product's <b style={{ color: BP.greenDark }}>business glossary</b> and shown in Looker Studio and Knowledge Catalog.
         </div>
       </div>
     </div>

@@ -39,7 +39,7 @@ export default function LeftPane() {
         <li className="left-item">
           <div className="left-app-icon">📊</div>
           <div className="left-item-body">
-            <span className="left-item-name">Reports (Power BI)</span>
+            <span className="left-item-name">Reports (Looker)</span>
             <span className="left-item-sub">View published data products</span>
           </div>
         </li>

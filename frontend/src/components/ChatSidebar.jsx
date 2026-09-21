@@ -83,7 +83,7 @@ export default function ChatSidebar({ activePhase, useCaseSubtitle = 'Daily camp
         <div className="flex items-center gap-2.5 px-2 py-1.5 rounded-md cursor-pointer">
           <BarChart3 size={16} style={{ color: BP.yellow }} />
           <div>
-            <div className="t-12 font-medium text-white">Reports (Power BI)</div>
+            <div className="t-12 font-medium text-white">Reports (Looker)</div>
             <div className="t-10" style={{ color: 'rgba(255,255,255,0.55)' }}>View published products</div>
           </div>
         </div>

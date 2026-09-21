@@ -297,7 +297,7 @@ function TableDetailDrawer({ entry, onClose }) {
           </button>
           <span style={{ color: BP.yellow, fontSize: 15 }}>▤</span>
           <div style={{ minWidth: 0 }}>
-            <div style={{ color: 'white', fontSize: 11.5, fontWeight: 600, lineHeight: 1.2 }}>Unity Catalog</div>
+            <div style={{ color: 'white', fontSize: 11.5, fontWeight: 600, lineHeight: 1.2 }}>Knowledge Catalog</div>
             <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.7)' }}>Table details</div>
           </div>
         </div>

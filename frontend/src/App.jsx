@@ -4,14 +4,41 @@ import ChatSidebar from './components/ChatSidebar'
 import ChatPane from './components/ChatPane'
 import FilesPanel from './components/FilesPanel'
 import TweakModal from './components/TweakModal'
-import LoginScreen from './components/LoginScreen'
 import PhaseStepper from './components/PhaseStepper'
 import { BP, phaseForStep, agentMeta } from './theme'
-import { Download, RotateCcw, LogOut } from './icons'
+import { Download, RotateCcw } from './icons'
 import { sendChatMessage, downloadFile, uploadFile } from './api/chat'
 
 const DDI_CHIP_ADJUST_ER   = 'Adjust the model'
 const DDI_CHIP_TWEAK_STTM  = 'Tweak the mapping'
+
+const _PHASE_ORDER = { dpi: 0, designer: 1, builder: 2 }
+
+// Derive phase from the agent name on a single message — more reliable than
+// current_step alone because the agent field is always present in messages[].
+function phaseFromAgent(agentName) {
+  const n = (agentName || '').toLowerCase()
+  if (n.includes('pipeline') || n.includes('test agent') || n.includes('publisher') || n.includes('builder')) return 'builder'
+  if (n.includes('sttm') || n.includes('gold model') || n.includes('gold er') || n.includes('silver layer') || n.includes('silver transform') || n.includes('designer')) return 'designer'
+  return null
+}
+
+// Compute the furthest-advanced phase from two signals:
+//   1. current_step sent by the backend (phaseForStep)
+//   2. the last agent name / card type visible in the conversation
+function deriveActivePhase(currentStep, messages, started) {
+  if (!started) return null
+  const stepPhase = phaseForStep(currentStep)
+  const msgPhase = [...messages]
+    .reverse()
+    .filter(m => m.role === 'agent' && !m.loading)
+    .map(m => (m.sttm_view || m.silver_transform_view) ? 'designer' : phaseFromAgent(m.agent))
+    .find(p => p !== null) ?? null
+  const best = [stepPhase, msgPhase]
+    .filter(Boolean)
+    .reduce((b, p) => !b || _PHASE_ORDER[p] > _PHASE_ORDER[b] ? p : b, null)
+  return best || 'dpi'
+}
 
 const UPLOAD_ALLOWED_STEPS = new Set([null, 'initial', 'dpi_clarifying', 'dpi_phase_b'])
 
@@ -27,13 +54,14 @@ function initialMessages() {
   }]
 }
 
+// Login removed — the app opens straight into the workspace with a default user.
+const DEFAULT_USER = { email: 'user@accenture.com', name: 'Accenture User', initials: 'AC' }
+
 export default function App() {
-  const [user, setUser] = useState(null)
-  if (!user) return <LoginScreen onSignIn={setUser} />
-  return <Workspace user={user} onSignOut={() => setUser(null)} />
+  return <Workspace user={DEFAULT_USER} />
 }
 
-function Workspace({ user, onSignOut }) {
+function Workspace({ user }) {
   const [messages, setMessages]           = useState(initialMessages)
   const [sessionId, setSessionId]             = useState(() => crypto.randomUUID())
   const [generatedFiles, setGeneratedFiles]   = useState([])
@@ -50,7 +78,7 @@ function Workspace({ user, onSignOut }) {
 
   const allowUpload = startingPointPicked && UPLOAD_ALLOWED_STEPS.has(currentStep) && !pendingFile
 
-  const activePhase = startingPointPicked ? (phaseForStep(currentStep) || 'dpi') : null
+  const activePhase = deriveActivePhase(currentStep, messages, startingPointPicked)
   const lastAgentMsg = [...messages].reverse().find(m => m.role === 'agent' && !m.loading)
   const activeAgent = lastAgentMsg?.agent || 'Data Product Assistant'
   const currentActivity = sending
@@ -287,12 +315,6 @@ function Workspace({ user, onSignOut }) {
               <div className="t-115 font-semibold" style={{ color: BP.text }}>{user.name}</div>
               <div className="t-105" style={{ color: BP.textMuted }}>{user.email}</div>
             </div>
-            <button onClick={onSignOut}
-              className="t-105 ml-1 px-2 py-1 rounded-md flex items-center gap-1"
-              style={{ border: `1px solid ${BP.border}`, color: BP.textMuted, background: 'white', cursor: 'pointer' }}
-              title="Sign out">
-              <LogOut size={11} /> Sign out
-            </button>
           </div>
         </div>
       </div>
