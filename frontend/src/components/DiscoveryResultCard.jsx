@@ -14,8 +14,8 @@
 //   - VISUAL DISCOVERY MAP:  vertical Gold -> Silver -> Bronze flow
 //   - RESULT:                one-line verdict strip
 //
-// Clicking a table name opens a Unity-Catalog-style detail drawer
-// (UCTablePanel port), populated from the discovery data the backend returns.
+// Clicking a table name opens a Knowledge-Catalog-style detail drawer,
+// populated from the discovery data the backend returns.
 
 import { useState } from 'react'
 
