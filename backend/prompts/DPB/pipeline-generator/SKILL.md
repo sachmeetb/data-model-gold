@@ -294,6 +294,8 @@ The spec may use either field-naming convention. Map accordingly:
 2. **Dataset creation** — one `CREATE SCHEMA IF NOT EXISTS \`bq_project\`.<layer> OPTIONS(location='us-central1')` per layer actually used. If the spec has no bronze, create only silver and gold datasets.
 3. **Table creation** — `CREATE TABLE IF NOT EXISTS \`bq_project\`.<layer>.<table_name> (col TYPE, ...)`. No `USING DELTA` clause and no `TBLPROPERTIES` — these are BigQuery Standard SQL tables.
 
+   **⚠ NULLABLE RULE — Do NOT add `NOT NULL` unless the catalog says so.** For every column, check `context.utility_catalog.data_catalog.layers.{layer}[*].columns[*].nullable`. Only emit `NOT NULL` when `nullable == false`. When `nullable == true` or the field is absent, the column definition MUST have no constraint — BigQuery columns are nullable by default. **Measure/metric columns (`conversions`, `clicks`, `impressions`, `revenue`, `spend`, any numeric aggregation target) are almost always nullable** because sparse data can produce NULL; marking them NOT NULL will cause BQ to reject INSERT/MERGE rows where those measures are missing. This rule applies to both silver and gold layer DDL.
+
    ### ⚠ HARD RULE — Silver MUST exist before any MERGE reads from it
 
    **Every silver table that appears on the FROM side of a gold MERGE (or as
@@ -448,9 +450,12 @@ CREATE SCHEMA IF NOT EXISTS `bq_project`.silver OPTIONS(location='us-central1');
 CREATE SCHEMA IF NOT EXISTS `bq_project`.gold OPTIONS(location='us-central1');
 
 -- ── Silver (input layer): {silver_table_name} ────────────────────────────────
+-- Column nullability comes from catalog[*].columns[*].nullable.
+-- Measure/metric columns are nullable — do NOT add NOT NULL unless catalog says nullable=false.
 CREATE TABLE IF NOT EXISTS `bq_project`.silver.{silver_table_name} (
-  col1  TYPE  NOT NULL,
-  col2  TYPE,
+  key_col   TYPE  NOT NULL,   -- only when catalog says nullable=false (e.g. a PK/FK dimension key)
+  measure1  TYPE,             -- measure columns: no NOT NULL — sparse data can be NULL
+  measure2  TYPE,
   ...
 );
 -- (only if grant_principal is set)

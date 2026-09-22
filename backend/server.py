@@ -1246,16 +1246,25 @@ def _format_publish_result(publish_report: dict) -> str:
     }
     lines: list[str] = [f"**{title_map[status]}**", ""]
 
-    layer_order = {"silver": 0, "gold": 1}
+    def _detect_layer(fqn: str) -> str:
+        """Detect layer from the dataset part of a BQ FQN (project.dataset.table)."""
+        low = fqn.lower()
+        if ".gold." in low or low.endswith(".gold"):
+            return "gold"
+        if ".silver." in low or low.endswith(".silver"):
+            return "silver"
+        if ".bronze." in low or low.endswith(".bronze"):
+            return "bronze"
+        # Fallback: old convention of _gold/_silver in table name
+        if "_gold" in low:
+            return "gold"
+        return "silver"
+
+    layer_order = {"bronze": 0, "silver": 1, "gold": 2}
     if tables:
-        sorted_tables = sorted(
-            tables,
-            key=lambda t: layer_order.get(
-                "gold" if "_gold" in t else "silver", 0
-            ),
-        )
+        sorted_tables = sorted(tables, key=lambda t: layer_order.get(_detect_layer(t), 1))
         for t in sorted_tables:
-            layer = "gold" if "_gold" in t else "silver"
+            layer = _detect_layer(t)
             lines.append(f"- **`{t}`** — {layer} layer")
         lines.append("")
 
@@ -1267,11 +1276,12 @@ def _format_publish_result(publish_report: dict) -> str:
 
     if actual_data:
         lines += ["---", "### Table Data (from BigQuery)", ""]
-        silver_keys = sorted(k for k in actual_data if "_silver" in k)
-        gold_keys   = sorted(k for k in actual_data if "_gold" in k)
+        bronze_keys = sorted(k for k in actual_data if _detect_layer(k) == "bronze")
+        silver_keys = sorted(k for k in actual_data if _detect_layer(k) == "silver")
+        gold_keys   = sorted(k for k in actual_data if _detect_layer(k) == "gold")
 
-        for table_key in silver_keys + gold_keys:
-            layer = "Silver" if "_silver" in table_key else "Gold"
+        for table_key in bronze_keys + silver_keys + gold_keys:
+            layer = _detect_layer(table_key).capitalize()
             tdata = actual_data[table_key]
             cols  = tdata.get("columns", [])
             rows  = tdata.get("rows", [])

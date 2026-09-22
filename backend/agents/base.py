@@ -34,6 +34,11 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 _GCP_PROJECT  = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
 _GCP_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+# Gemini model calls use their own location, decoupled from the data/BQ region.
+# Gemini 3.x models (e.g. gemini-3.8-flash) are only served from the "global"
+# Vertex location; gemini-2.5-pro is available there too, so route all model
+# traffic to global while BigQuery/GCS stay in GOOGLE_CLOUD_LOCATION.
+_GENAI_LOCATION = os.environ.get("GOOGLE_GENAI_LOCATION", "global")
 
 # google.genai reads this env var when the Client is constructed to decide
 # whether to route to Vertex AI or Google AI Studio.
@@ -97,7 +102,7 @@ _SKILL_MAX_TOKENS: dict[str, int] = {
 _DEFAULT_MAX_TOKENS = 4096
 
 _DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
-_FLASH_MODEL   = "gemini-2.5-flash"
+_FLASH_MODEL   = os.getenv("GEMINI_FLASH_MODEL", "gemini-3.8-flash")
 
 _SKILL_MODEL: dict[str, str] = {
     # Pro: heavy structured JSON output
@@ -119,7 +124,7 @@ if os.getenv("GEMINI_MODEL_TIER") == "flash":
     _SKILL_MODEL = {k: _FLASH_MODEL for k in _SKILL_MODEL}
 
 # ── Thinking budget ───────────────────────────────────────────────────────────
-# gemini-2.5-flash has "thinking" ON by default, and thinking tokens are drawn
+# The flash model has "thinking" ON by default, and thinking tokens are drawn
 # from the SAME max_output_tokens budget as the answer. For agents that must emit
 # a large structured JSON (Test Agent, Challenger, …), unbounded thinking can
 # consume the budget and truncate the JSON mid-object → the response fails to
@@ -153,7 +158,7 @@ def _client() -> genai.Client:
         _genai_client = genai.Client(
             vertexai=True,
             project=_GCP_PROJECT,
-            location=_GCP_LOCATION,
+            location=_GENAI_LOCATION,
         )
     return _genai_client
 
