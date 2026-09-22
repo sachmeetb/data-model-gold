@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import uuid
+import yaml
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
@@ -1750,6 +1751,156 @@ def _build_silver_transform_view(silver_transform: dict) -> dict:
     }
 
 
+def _build_gold_data_contract_view(
+    gold_final: dict,
+    discovery_input: dict | None = None,
+    silver_transform: dict | None = None,
+) -> dict | None:
+    """
+    Shape the gold-final `data_catalog` into an OpenDataContract-style view for
+    the frontend DataContractCard (design ported from the SILVER product).
+
+    Returns None when there is no gold-layer catalog to render, so the caller
+    can simply skip attaching `data_contract_view` to the message.
+    """
+    if not isinstance(gold_final, dict):
+        return None
+    catalog = gold_final.get("data_catalog") or {}
+    layers = catalog.get("layers") or {}
+    gold_entries = [e for e in (layers.get("gold") or []) if isinstance(e, dict)]
+    if not gold_entries:
+        return None
+
+    discovery_input = discovery_input or {}
+    domain = (
+        gold_final.get("domain")
+        or discovery_input.get("domain")
+        or "gold"
+    )
+    use_case = (
+        gold_final.get("use_case")
+        or discovery_input.get("use_case_name")
+        or f"{str(domain).replace('_', ' ').title()} Gold Layer"
+    )
+
+    # ── Models & fields (one entry per gold table) ────────────────────────────
+    models: dict = {}
+    for entry in gold_entries:
+        full_name = entry.get("full_name") or entry.get("table_name") or ""
+        tname = (
+            entry.get("table_name")
+            or (full_name.split(".")[-1] if full_name else "gold_table")
+        )
+        fields: dict = {}
+        for c in entry.get("columns") or []:
+            if not isinstance(c, dict):
+                continue
+            cname = c.get("name") or ""
+            if not cname:
+                continue
+            fentry: dict = {
+                "type":        str(c.get("data_type") or c.get("type") or "STRING").lower(),
+                "description": c.get("description", ""),
+                "nullable":    bool(c.get("nullable", True)),
+            }
+            if c.get("is_pk") or c.get("primary_key"):
+                fentry["primary"] = True
+                fentry["nullable"] = False
+            fk = c.get("fk_ref") or c.get("references") or c.get("fk_to")
+            if fk:
+                fentry["references"] = fk
+            tags = c.get("tags") if isinstance(c.get("tags"), dict) else {}
+            is_pii = bool(c.get("pii")) or bool(tags.get("pii")) or \
+                str(tags.get("classification", "")).upper() == "PII"
+            if is_pii:
+                fentry["pii"] = True
+                fentry["classification"] = "PII"
+            fields[cname] = fentry
+        models[tname] = {
+            "description":  entry.get("description", f"Gold conformed entity {tname}"),
+            "type":         "table",
+            "physicalName": full_name or tname,
+            "fields":       fields,
+        }
+
+    # ── Quality assertions (derive PK/FK rules; fold in silver dq_rules) ──────
+    quality: list = []
+    seen: set = set()
+
+    def _add_rule(description: str, must_be: str) -> None:
+        key = (description, must_be)
+        if must_be and key not in seen:
+            seen.add(key)
+            quality.append({"type": "custom", "description": description, "mustBe": must_be})
+
+    for entry in gold_entries:
+        for c in entry.get("columns") or []:
+            if not isinstance(c, dict):
+                continue
+            cname = c.get("name") or ""
+            if not cname:
+                continue
+            if c.get("is_pk") or c.get("primary_key"):
+                _add_rule(f"Primary key `{cname}` must be unique and non-null",
+                          f"{cname} IS NOT NULL")
+            fk = c.get("fk_ref") or c.get("references") or c.get("fk_to")
+            if fk:
+                _add_rule(f"`{cname}` must reference a valid {fk} key",
+                          f"{cname} IN (SELECT key FROM {fk})")
+    for r in (silver_transform or {}).get("dq_rules") or []:
+        if isinstance(r, dict) and r.get("check"):
+            col = r.get("column") or r.get("table") or ""
+            desc = r.get("note") or (f"Quality rule on `{col}`" if col else "Data quality rule")
+            _add_rule(desc, r.get("check"))
+    quality = quality[:8]
+
+    # ── Governance standards ──────────────────────────────────────────────────
+    raw_standards = (
+        discovery_input.get("regulatory_drivers")
+        or discovery_input.get("data_standards")
+        or catalog.get("standards")
+        or []
+    )
+    if isinstance(raw_standards, str):
+        raw_standards = [raw_standards]
+    standards = [str(s) for s in raw_standards if s] or ["BigQuery Native", "Knowledge Catalog"]
+
+    first = gold_entries[0]
+    target_dataset = first.get("schema_name") or "gold"
+    owner = first.get("owner") or f"{str(domain).replace('_', ' ').title()} Data Engineering"
+    refresh = first.get("refresh_cadence") or "Daily (04:00 UTC)"
+
+    contract = {
+        "dataContractSpecification": "0.9.3",
+        "id": f"urn:datacontract:gold:{domain}",
+        "info": {
+            "title":          f"{use_case} — Data Contract",
+            "version":        "1.0.0",
+            "status":         "ACTIVE",
+            "description":    catalog.get("description")
+                              or f"Official Gold Layer Data Contract for {use_case}.",
+            "domain":         str(domain),
+            "owner":          owner,
+            "standards":      standards,
+            "target_dataset": target_dataset,
+        },
+        "servicelevels": {
+            "freshness":    {"cron": "0 4 * * *", "maxLag": "24h", "schedule": refresh},
+            "availability": {"percentage": "99.9%"},
+            "retention":    {"period": "7 years", "policy": "Compliant Archival"},
+        },
+        "models":  models,
+        "quality": quality,
+    }
+    try:
+        contract["yaml_text"] = yaml.dump(
+            contract, sort_keys=False, default_flow_style=False, allow_unicode=True,
+        )
+    except Exception:
+        contract["yaml_text"] = json.dumps(contract, indent=2, default=str)
+    return contract
+
+
 def _build_synthetic_blueprint(
     discovery_output: dict,
     gold_er: dict,
@@ -2048,11 +2199,15 @@ async def _handle_ddi_chat(
 
         spec = ddi_pipeline.extract_pipeline_spec(blueprint)
         view = _build_silver_transform_view(silver_xform)
+        contract_view = _build_gold_data_contract_view(
+            gold_final, discovery_input, silver_transform=silver_xform,
+        )
 
         _save_session(
             step="ddi_review_silver_xform",
             silver_transformation=silver_xform,
             silver_transform_view=view,
+            data_contract_view=contract_view,
             gold_final=gold_final,
             ddi_blueprint=blueprint,
             spec=spec,
@@ -2080,7 +2235,7 @@ async def _handle_ddi_chat(
                 {"id": blueprint_file_id, "name": f"ddi-blueprint-{session_id[:8]}.json", "label": "DDI Blueprint"},
                 {"id": catalog_file_id,   "name": f"utility_catalog-{session_id[:8]}.json", "label": "Utility Catalog"},
             ],
-            extra_msg_fields={"silver_transform_view": view},
+            extra_msg_fields={"silver_transform_view": view, "data_contract_view": contract_view},
         )
 
     # ── Step 4: review Silver Transformation → proceed to DPB ────────────────
@@ -3315,11 +3470,16 @@ async def _handle_dpi_chat(
         if df:
             view["domain_framework"] = df
 
+        contract_view = _build_gold_data_contract_view(
+            gold_final, discovery_input, silver_transform=silver_xform,
+        )
+
         _sessions[session_id] = {
             **session,
             "step": "dpi_review_silver_xform",
             "silver_transformation": silver_xform,
             "silver_transform_view": view,
+            "data_contract_view": contract_view,
             "gold_final": gold_final,
             "ddi_blueprint": blueprint,
             "spec": spec,
@@ -3352,6 +3512,7 @@ async def _handle_dpi_chat(
                     {"id": catalog_file_id,       "name": f"utility_catalog-{session_id[:8]}.json", "label": "Utility Catalog"},
                 ],
                 "silver_transform_view": view,
+                "data_contract_view": contract_view,
             }],
             "is_complete": False,
             "text": intro,

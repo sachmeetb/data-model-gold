@@ -8,6 +8,7 @@ import ChallengerCard from './ChallengerCard'
 import StartingPointCards from './StartingPointCards'
 import MermaidBlock from './MermaidBlock'
 import STTMCard from './STTMCard'
+import DataContractCard from './DataContractCard'
 import { agentMeta } from '../theme'
 
 const COLLAPSE_THRESHOLD_PX = 320
@@ -358,7 +359,7 @@ export default function MessageRow({ msg, onChipClick }) {
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [isUser, msg.loading, msg.text, msg.discovery_view, msg.glossary, msg.classification_view, msg.challenger_view, msg.sttm_view, msg.silver_transform_view])
+  }, [isUser, msg.loading, msg.text, msg.discovery_view, msg.glossary, msg.classification_view, msg.challenger_view, msg.sttm_view, msg.silver_transform_view, msg.data_contract_view])
 
   const showChevron      = tooLong && !isUser && !msg.loading
   const isGlossary       = !isUser && !!msg.glossary
@@ -434,6 +435,7 @@ export default function MessageRow({ msg, onChipClick }) {
                     {wrapInfoSections(dedupBulletsAgainstParagraph(splitSilverNarrative(msg.text)))}
                   </ReactMarkdown>
                 )}
+                {msg.data_contract_view && <DataContractCard view={msg.data_contract_view} />}
                 <STTMCard view={msg.silver_transform_view} variant="silver" />
               </>
             ) : isChallAgent ? (
