@@ -37,7 +37,12 @@ substitutions:
   _REGION: us-central1
   _PROJECT_ID: ''
   _REPO_NAME: dp-assistant
-  _BACKEND_URL: ''    # pass via --substitutions when submitting
+  # Relative path, NOT an absolute backend URL: browsers cannot call the backend
+  # Cloud Run service directly (run.invoker is restricted to auth-proxy-sa), so the
+  # SPA calls same-origin /__api and the proxy tier forwards it to the backend.
+  # NOTE: if overriding on the CLI from Git Bash, MSYS rewrites a leading "/" into a
+  # Windows path — submit from PowerShell or set MSYS_NO_PATHCONV=1.
+  _BACKEND_URL: '/__api'
 
 options:
   logging: CLOUD_LOGGING_ONLY
